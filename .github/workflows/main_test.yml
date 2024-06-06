@@ -1,0 +1,95 @@
+name: Helm Chart CI/CD
+'on':
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - .github/workflows/**
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - .github/workflows/**
+env:
+  HELM_CHART_PATH: ./
+  ECR_REPOSITORY: vatsal101-mo-mrjq8u-s64n02
+  AWS_REGION: ap-south-1
+  GITHUB_USERNAME: vedant-8680
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    outputs:
+      id: pipeline_outputs
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Helm
+        run: >-
+          curl -fsSL -o get_helm.sh
+          https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3
+          && chmod 700 get_helm.sh && ./get_helm.sh
+      - name: Lint Helm Chart
+        run: helm lint
+      - name: Installing Dependencies
+        run: helm dep up
+      - name: Increment Chart Version
+        run: >-
+          CURRENT_VERSION=$(helm show chart "${{ env.HELM_CHART_PATH }}" | grep
+          '^version:' | awk '{print $2}')
+
+          MAJOR=$(echo "$CURRENT_VERSION" | cut -d '.' -f 1)
+
+          MINOR=$(echo "$CURRENT_VERSION" | cut -d '.' -f 2)
+
+          PATCH=$(echo "$CURRENT_VERSION" | cut -d '.' -f 3)
+
+          if [ "$MAJOR_CHANGE" == "true" ]; then
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+          elif [ "$MINOR_CHANGE" == "true" ]; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          else
+            PATCH=$((PATCH + 1))
+          fi
+
+          NEW_VERSION=$MAJOR.$MINOR.$PATCH
+
+          echo "Current Version: ${CURRENT_VERSION}"
+
+          echo "New Version: ${NEW_VERSION}"
+
+          echo "::set-output name=NEW_CHART_VERSION::NEW_VERSION"
+
+          sed -i "s|version: ${CURRENT_VERSION}|version: ${NEW_VERSION}|g"
+          ./Chart.yaml
+      - name: Commit and Push Chart Changes
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: >-
+          git config --global user.name 'rachitsharma615' && git config --global
+          user.email 'rachitsharma614@gmail.com' && git add ./Chart.yaml && git
+          commit -m "Bump chart version to ${NEW_VERSION}" && git push
+          https://${{ secrets.GH_TOKEN }}@github.com/rachitsharma615/${{
+          env.ECR_REPOSITORY }}.git
+      - name: Build Helm Package
+        run: helm package ${{ env.HELM_CHART_PATH }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Login to Amazon ECR
+        run: >-
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | helm
+          registry login --username AWS --password-stdin ${{
+          secrets.AWS_ECR_REGISTRY }}
+      - name: Push Helm Chart to ECR
+        run: >-
+          NEW_CHART_VERSION=$(helm show chart "${{ env.HELM_CHART_PATH }}" |
+          grep '^version:' | awk '{print $2}')
+
+          helm push /home/runner/work/${{ env.ECR_REPOSITORY }}/${{
+          env.ECR_REPOSITORY }}/${{ env.ECR_REPOSITORY
+          }}-${NEW_CHART_VERSION}.tgz oci://${{ secrets.AWS_ECR_REGISTRY }}
